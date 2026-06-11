@@ -1,0 +1,16 @@
+[Unit]
+Description=MCP Memory RS HTTP shadow service
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mcp-memory-rs --http
+Environment=MCP_MEMORY_CONFIG=%h/.config/mcp-memory-rs/config.toml
+EnvironmentFile=-%h/.config/mcp-memory-rs/env
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

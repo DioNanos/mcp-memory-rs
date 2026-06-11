@@ -1,0 +1,16 @@
+/target
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Deployment-specific config files — keep example.toml, ignore shadow/local configs
+config/*.shadow.toml
+memory-config.toml
+
+# Secrets
+.env
+*.token
+
+# Logs
+*.log

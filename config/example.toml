@@ -1,0 +1,82 @@
+# mcp-memory-rs — example configuration
+#
+# Copy this file to memory-config.toml (or set MCP_MEMORY_CONFIG=/path/to/config.toml)
+# and adjust the values for your deployment.
+#
+# Environment variables override the corresponding TOML fields at startup:
+#   MCP_MEMORY_MODE       = offline | http
+#   MCP_MEMORY_HOST       = bind host (HTTP mode)
+#   MCP_MEMORY_PORT       = bind port (HTTP mode)
+#   MCP_MEMORY_DIR        = storage base directory
+#   MCP_DEVICE            = device name for this node
+#   MCP_MEMORY_REMOTE_URL = sync remote URL
+#   MCP_MEMORY_REMOTE_TOKEN_FILE = path to file containing the remote token
+#   MCP_MEMORY_TOKEN      = auth token for HTTP server (required in http mode)
+
+# ── Server ─────────────────────────────────────────────────────────────────────
+
+[server]
+# Startup mode.
+# "offline" — stdio MCP transport only (default, no HTTP listener).
+# "http"    — starts an HTTP API server in addition to (or instead of) stdio.
+mode = "offline"
+
+# Bind address and port for the HTTP server (only used in http mode).
+# Default: 127.0.0.1 (loopback only — do NOT expose to the public internet).
+host = "127.0.0.1"
+port = 3110
+
+# ── Storage ────────────────────────────────────────────────────────────────────
+
+[storage]
+# Directory where categories, database, and backups are stored.
+# Tilde (~) is expanded to $HOME at runtime. Environment variables such as
+# $HOME are NOT expanded here — use ~ or an absolute path.
+base_dir = "~/.local/state/mcp-memory-rs"
+
+# How many days of daily backups to retain.
+backup_retention_days = 30
+
+# Maximum number of versions kept per category.
+max_versions = 100
+
+# ── Access Control ────────────────────────────────────────────────────────────
+
+[acl]
+# Unique name for this node. Used as the actor in write operations.
+# Defaults to $MCP_DEVICE env var, then to the system hostname.
+device_name = "my-device"
+
+# Devices listed here are treated as admins: they can write any non-reserved
+# category, including base categories (base, projects, infrastructure, …).
+# Typically only your primary server/coordinator node should be admin.
+admin_devices = ["my-server"]
+
+# All devices in your fleet that are allowed to write their own device category
+# (e.g. device "my-laptop" can write categories "my-laptop" and
+# "workflow_my-laptop"). Add every node name here.
+# If left empty, device-self writes are disabled for all non-admin devices.
+device_categories = ["my-server", "my-laptop", "my-phone"]
+
+# ── Sync ──────────────────────────────────────────────────────────────────────
+
+[sync]
+# URL of the remote HTTP server to sync with. Leave empty for offline-only.
+# Example: http://127.0.0.1:3110  (via SSH tunnel to a central server)
+remote_url = ""
+
+# Path to a file containing the remote auth token (one line, no trailing newline).
+# Must be an ABSOLUTE path: this value is read literally — neither ~ nor $HOME
+# is expanded. Alternatively set the MCP_MEMORY_REMOTE_TOKEN_FILE env var.
+# Example: remote_token_file = "/etc/mcp-memory-rs/remote.token"
+remote_token_file = ""
+
+# Reserved for a future background sync loop; NOT used at runtime yet.
+# Sync currently runs on demand via the memory_sync tool / sync endpoints.
+sync_interval_secs = 300
+
+# Conflict resolution strategy when both sides updated the same category:
+#   last_write_wins — the most recently updated version wins (default)
+#   local_wins      — local version always takes priority
+#   remote_wins     — remote version always takes priority
+conflict_strategy = "last_write_wins"
