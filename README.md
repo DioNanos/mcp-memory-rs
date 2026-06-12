@@ -30,6 +30,31 @@ Design choices that follow from that:
 - **Zero ML in the core**: full-text search is SQLite FTS5 with BM25;
   `memory_search_semantic` adds an optional TF-IDF hybrid. No model downloads.
 
+## Install
+
+**Prebuilt binary** (recommended) — download the archive for your platform from
+the [latest release](https://github.com/DioNanos/mcp-memory-rs/releases/latest),
+extract, and point your MCP client at the binary:
+
+```bash
+tar xzf mcp-memory-rs-x86_64-unknown-linux-gnu.tar.gz
+install -m755 mcp-memory-rs-*/mcp-memory-rs ~/.local/bin/
+```
+
+Prebuilt targets (Linux + Android): `x86_64-unknown-linux-gnu`,
+`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-gnu`,
+`aarch64-unknown-linux-musl` (edge / ARM / Termux), `aarch64-linux-android`.
+
+**macOS**: no prebuilt binary is shipped (it would need Apple code-signing).
+Install from source instead — `cargo install` compiles it on your Mac in one
+command, no signing needed:
+
+```bash
+cargo install --git https://github.com/DioNanos/mcp-memory-rs --locked
+```
+
+`--locked` uses the committed `Cargo.lock` (reproducible build).
+
 ## Quick start
 
 ```bash
