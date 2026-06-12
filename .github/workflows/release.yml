@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN: mcp-memory-rs
+
+jobs:
+  # Linux x86_64 + arm64 (gnu/musl). macOS ships no prebuilt binary —
+  # macOS users install from source via `cargo install` (no Apple signing).
+  build-linux:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            cross: false
+          - target: x86_64-unknown-linux-musl
+            cross: false
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            cross: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --bin "$BIN" --target ${{ matrix.target }}
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --locked --bin "$BIN" --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="${BIN}-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/${BIN}" "$dist/"
+          cp README.md LICENSE "$dist/"
+          tar czf "${dist}.tar.gz" "$dist"
+          sha256sum "${dist}.tar.gz" > "${dist}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.BIN }}-${{ matrix.target }}.tar.gz
+            ${{ env.BIN }}-${{ matrix.target }}.tar.gz.sha256
+
+  # Android arm64 via cargo-ndk + a modern NDK (r27): the stock cross android
+  # image's ancient NDK fails to link (-lunwind); r23+ uses LLVM's libunwind.
+  build-android:
+    name: Build aarch64-linux-android
+    runs-on: ubuntu-latest
+    env:
+      TARGET: aarch64-linux-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: cargo ndk -t arm64-v8a build --release --locked --bin "$BIN"
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="${BIN}-${TARGET}"
+          mkdir -p "$dist"
+          cp "target/${TARGET}/release/${BIN}" "$dist/"
+          cp README.md LICENSE "$dist/"
+          tar czf "${dist}.tar.gz" "$dist"
+          sha256sum "${dist}.tar.gz" > "${dist}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TARGET }}
+          path: |
+            ${{ env.BIN }}-${{ env.TARGET }}.tar.gz
+            ${{ env.BIN }}-${{ env.TARGET }}.tar.gz.sha256
+
+  release:
+    name: Publish release
+    needs: [build-linux, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} dist/ \;
+          ls -l dist
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
