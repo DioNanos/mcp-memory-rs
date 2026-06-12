@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.dionanos/mcp-memory-rs",
+  "name": "io.github.DioNanos/mcp-memory-rs",
   "title": "mcp-memory-rs",
   "description": "Local-first agent memory: versioned JSON categories, BM25 search, per-device ACL, fleet sync.",
   "version": "0.2.1",
