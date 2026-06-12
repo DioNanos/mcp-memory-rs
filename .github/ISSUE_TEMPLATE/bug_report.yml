@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a problem with mcp-memory-rs
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of the binary's `--version`.
+      placeholder: "mcp-memory-rs 0.2.1"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform / target
+      description: OS and target triple.
+      placeholder: "Linux, x86_64-unknown-linux-gnu"
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code
+        - Codex
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
