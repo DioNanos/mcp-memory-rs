@@ -35,6 +35,15 @@ Design choices that follow from that:
 > [mcp-vl-msa-rs](https://github.com/DioNanos/mcp-vl-msa-rs). This server holds
 > the curated agent state; that one holds the queryable corpus.
 
+```mermaid
+flowchart LR
+    A["AI agent<br/>(any MCP client)"]
+    A -->|"curated state<br/>read / write / sync"| M["mcp-memory-rs<br/><i>the notebook</i>"]
+    A -->|"corpus recall<br/>index / search / fetch"| V["mcp-vl-msa-rs<br/><i>the library</i>"]
+    M --- D1[("JSON categories<br/>SQLite FTS5")]
+    V --- D2[("tantivy BM25<br/>collections")]
+```
+
 ## Install
 
 **Prebuilt binary** (recommended) — download the archive for your platform from
