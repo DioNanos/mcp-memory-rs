@@ -30,6 +30,11 @@ Design choices that follow from that:
 - **Zero ML in the core**: full-text search is SQLite FTS5 with BM25;
   `memory_search_semantic` adds an optional TF-IDF hybrid. No model downloads.
 
+> **The pair:** for *corpus* recall (chunked documents, BM25 retrieval,
+> original-text injection) see the companion server
+> [mcp-vl-msa-rs](https://github.com/DioNanos/mcp-vl-msa-rs). This server holds
+> the curated agent state; that one holds the queryable corpus.
+
 ## Install
 
 **Prebuilt binary** (recommended) — download the archive for your platform from
