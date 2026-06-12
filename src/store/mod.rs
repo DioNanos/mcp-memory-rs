@@ -193,13 +193,32 @@ impl Store {
                 |r| r.get(0),
             )?;
             if count == 0 {
-                return Err(crate::error::MemoryError::NotFound(name.into()));
+                return Err(self.not_found(name));
             }
         }
-        let content = std::fs::read_to_string(&path)
-            .map_err(|_| crate::error::MemoryError::NotFound(name.into()))?;
+        let content =
+            std::fs::read_to_string(&path).map_err(|_| crate::error::MemoryError::NotFound(name.into()))?;
         let value: serde_json::Value = serde_json::from_str(&content)?;
         Ok(value)
+    }
+
+    /// Build a teaching NotFound error that lists the available category names
+    /// (capped) so a calling AI can recover without a separate memory_list.
+    fn not_found(&self, name: &str) -> crate::error::MemoryError {
+        const MAX_LISTED: usize = 30;
+        match self.list() {
+            Ok(cats) if !cats.is_empty() => {
+                let total = cats.len();
+                let mut names: Vec<String> = cats.into_iter().map(|c| c.name).collect();
+                names.truncate(MAX_LISTED);
+                let mut listed = names.join(", ");
+                if total > MAX_LISTED {
+                    listed.push_str(&format!(", … (+{} more)", total - MAX_LISTED));
+                }
+                crate::error::MemoryError::NotFound(format!("{name}; available: [{listed}]"))
+            }
+            _ => crate::error::MemoryError::NotFound(format!("{name}; no categories exist yet")),
+        }
     }
 
     pub fn read_with_meta(&self, name: &str) -> Result<(serde_json::Value, CategoryMeta)> {
@@ -1303,6 +1322,37 @@ mod tests {
 
         let result = store.read("does_not_exist");
         assert!(result.is_err());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_read_missing_lists_available_categories() {
+        let (config, dir) = unique_config("notfound");
+        let mut store = Store::new(&config).unwrap();
+        store
+            .write("base", &serde_json::json!({"a": 1}), None, "actor", None)
+            .unwrap();
+        store
+            .write("projects", &serde_json::json!({"b": 2}), None, "actor", None)
+            .unwrap();
+
+        let err = store.read("nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nope"), "names the missing category: {msg}");
+        assert!(msg.contains("available:"), "lists available: {msg}");
+        assert!(msg.contains("base"), "mentions existing 'base': {msg}");
+        assert!(msg.contains("projects"), "mentions existing 'projects': {msg}");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_read_missing_on_empty_store() {
+        let (config, dir) = unique_config("empty");
+        let store = Store::new(&config).unwrap();
+
+        let err = store.read("nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no categories exist yet"), "empty-store hint: {msg}");
         cleanup(&dir);
     }
 

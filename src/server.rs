@@ -40,6 +40,8 @@ impl JsonSchema for EmptyParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadParams {
+    /// Name of the memory category to read (the parameter is 'category', NOT
+    /// 'key'). Use memory_list to discover valid names.
     pub category: String,
     pub fields: Option<String>,
 }
@@ -233,7 +235,7 @@ impl MemoryServer {
     // ── Tool 1: memory_read ─────────────────────────────────────
 
     #[tool(
-        description = "Read a memory category. Returns JSON content with optional field filtering.",
+        description = "Read a memory category by name (parameter: 'category', NOT 'key'). Returns the category's JSON content plus metadata, with optional comma-separated field filtering. Use memory_list first to see valid category names.",
         annotations(read_only_hint = true)
     )]
     async fn memory_read(
