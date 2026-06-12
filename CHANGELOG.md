@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.1 — 2026-06-12
+
+AI-first discoverability. No breaking changes.
+
+### Added
+
+- **`initialize` instructions.** The server now returns an AI-first
+  instructions string describing the memory model and the entry-point tools
+  (`memory_list` → `memory_read` → `memory_write`), so a weak client model can
+  drive the server without prior knowledge of its surface.
+- README **"AI client compatibility"** section and a
+  `default_tools_approval_mode = "approve"` line in the Codex config snippet.
+
+### Changed
+
+- **`rmcp` bumped 1.3 → 1.7** for a lenient MCP handshake. Under 1.3.0 a client
+  that omitted `notifications/initialized` could hang on `tools/list` with no
+  error; 1.7.0 (already used by the companion `mcp-vl-msa-rs`) does not.
+- **`memory_read` now teaches its parameter.** The tool and field descriptions
+  state explicitly that the parameter is `category`, not `key`.
+- **Better not-found errors.** Reading a missing category returns
+  `Category not found: <name>; available: [a, b, …]` (capped at 30) — or a
+  "no categories exist yet" hint on an empty store — so a model can self-correct
+  without a separate `memory_list`.
+
+### Internal
+
+- Regression test pinning `readOnlyHint` on the eleven read-only tools and its
+  absence on the six mutating tools.
+
 ## 0.2.0 — 2026-06-12
 
 First publishable release.

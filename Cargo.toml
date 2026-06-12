@@ -1,6 +1,6 @@
 [package]
 name = "mcp-memory-rs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Local-first MCP memory server with per-device ACL and fleet sync"
 license = "Apache-2.0"
