@@ -88,6 +88,8 @@ Codex (`~/.codex/config.toml`):
 [mcp_servers.memory]
 command = "/path/to/mcp-memory-rs"
 env = { MCP_DEVICE = "my-laptop" }
+# auto-approve read-only tools (memory_read/list/search/…); writes still gated
+default_tools_approval_mode = "approve"
 ```
 
 Configuration is TOML — copy [`config/example.toml`](config/example.toml) and
@@ -161,6 +163,21 @@ MCP_MEMORY_TOKEN=<secret> ./target/release/mcp-memory-rs --http
 
 The same surface is available over HTTP (`/api/v1/*`) for non-MCP consumers;
 `/health` is unauthenticated, everything else requires the bearer token.
+
+### AI client compatibility
+
+The server is built to be self-explanatory to a weak client model:
+
+- At `initialize` it returns an **instructions** string describing the memory
+  model and the entry-point tools. Some lightweight clients ignore this field;
+  if your client never surfaces it, read the tool descriptions instead — they
+  carry the same guidance (e.g. `memory_read` takes `category`, not `key`).
+- Read-only tools are annotated `readOnlyHint`, so a client such as Codex can
+  auto-approve them. On Codex, an `unsupported call` / `user cancelled`
+  result usually means the tool-approval gate fired, not a server fault — set
+  `default_tools_approval_mode = "approve"` (see the Codex snippet above).
+- The server speaks the standard MCP handshake. A client must complete
+  `initialize` and send `notifications/initialized` like any MCP client.
 
 ## Storage layout
 
