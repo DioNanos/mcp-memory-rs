@@ -1096,10 +1096,23 @@ impl MemoryServer {
     }
 }
 
+/// AI-first usage guide returned at `initialize` so that a weak client model
+/// can drive the server without prior knowledge of its tools. Opens with what
+/// to do, not with vocabulary.
+const SERVER_INSTRUCTIONS: &str = "Persistent, versioned memory for an AI agent, \
+organized in named JSON categories (e.g. 'base', 'projects', a per-device category). \
+Start with memory_list to see what exists, memory_read {category} to load one, \
+memory_write {category, content} to save (merge=true patches per top-level key; \
+expected_hash prevents clobbering). memory_search runs BM25 full-text search across \
+categories; memory_context loads several categories in one call for session warmup. \
+Every write is versioned (memory_history) and deletes are backed up first. State lives \
+on local disk and survives across sessions and model swaps.";
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MemoryServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(SERVER_INSTRUCTIONS)
     }
 }
 
@@ -1249,6 +1262,75 @@ mod contract_tests {
                 !names.contains(removed),
                 "short alias '{removed}' must not be re-registered"
             );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn get_info_exposes_ai_first_instructions() {
+        let (config, dir) = test_config("instructions");
+        let server = MemoryServer::from_config(config).expect("server should start");
+        let info = server.get_info();
+        let instructions = info
+            .instructions
+            .expect("initialize must return instructions for weak AI clients");
+        // Must open with the actionable verb, not jargon.
+        assert!(
+            instructions.starts_with("Persistent, versioned memory"),
+            "instructions should open with usage framing"
+        );
+        // Must name the entry-point tools so a model can self-bootstrap.
+        for needle in ["memory_list", "memory_read", "memory_write"] {
+            assert!(
+                instructions.contains(needle),
+                "instructions must mention {needle}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_only_tools_carry_read_only_hint() {
+        let (config, dir) = test_config("readonly-hint");
+        let server = MemoryServer::from_config(config).expect("server should start");
+        let tools = server.tool_router.list_all();
+
+        let read_only = [
+            "memory_read",
+            "memory_list",
+            "memory_search",
+            "memory_search_semantic",
+            "memory_history",
+            "memory_delta",
+            "memory_context",
+            "memory_status",
+            "memory_doctor",
+            "sync_manifest",
+            "sync_diff",
+        ];
+        let mutating = [
+            "memory_write",
+            "memory_delete",
+            "memory_compact",
+            "memory_sync",
+            "sync_push",
+            "sync_pull",
+        ];
+
+        for tool in &tools {
+            let name = tool.name.as_ref();
+            let hint = tool
+                .annotations
+                .as_ref()
+                .and_then(|a| a.read_only_hint)
+                .unwrap_or(false);
+            if read_only.contains(&name) {
+                assert!(hint, "{name} must be annotated read_only_hint=true");
+            }
+            if mutating.contains(&name) {
+                assert!(!hint, "{name} must not claim read_only_hint");
+            }
         }
 
         let _ = std::fs::remove_dir_all(dir);
