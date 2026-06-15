@@ -196,8 +196,8 @@ impl Store {
                 return Err(self.not_found(name));
             }
         }
-        let content =
-            std::fs::read_to_string(&path).map_err(|_| crate::error::MemoryError::NotFound(name.into()))?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|_| crate::error::MemoryError::NotFound(name.into()))?;
         let value: serde_json::Value = serde_json::from_str(&content)?;
         Ok(value)
     }
@@ -1333,7 +1333,13 @@ mod tests {
             .write("base", &serde_json::json!({"a": 1}), None, "actor", None)
             .unwrap();
         store
-            .write("projects", &serde_json::json!({"b": 2}), None, "actor", None)
+            .write(
+                "projects",
+                &serde_json::json!({"b": 2}),
+                None,
+                "actor",
+                None,
+            )
             .unwrap();
 
         let err = store.read("nope").unwrap_err();
@@ -1341,7 +1347,10 @@ mod tests {
         assert!(msg.contains("nope"), "names the missing category: {msg}");
         assert!(msg.contains("available:"), "lists available: {msg}");
         assert!(msg.contains("base"), "mentions existing 'base': {msg}");
-        assert!(msg.contains("projects"), "mentions existing 'projects': {msg}");
+        assert!(
+            msg.contains("projects"),
+            "mentions existing 'projects': {msg}"
+        );
         cleanup(&dir);
     }
 
@@ -1352,7 +1361,10 @@ mod tests {
 
         let err = store.read("nope").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("no categories exist yet"), "empty-store hint: {msg}");
+        assert!(
+            msg.contains("no categories exist yet"),
+            "empty-store hint: {msg}"
+        );
         cleanup(&dir);
     }
 

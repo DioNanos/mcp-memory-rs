@@ -1,5 +1,11 @@
 # mcp-memory-rs
 
+[![CI](https://img.shields.io/github/actions/workflow/status/DioNanos/mcp-memory-rs/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/DioNanos/mcp-memory-rs/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-79%20passing-2ea44f?style=flat-square)](https://github.com/DioNanos/mcp-memory-rs/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![Local First](https://img.shields.io/badge/local--first-no%20cloud%20deps-111827?style=flat-square)](#why)
+
 Local-first MCP memory server in pure Rust. Persistent, versioned, queryable
 memory for AI agents — owned by the user, not by a platform.
 
