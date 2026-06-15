@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-06-15
+
+Packaging and docs. No functional or API changes.
+
+### Changed
+
+- README now surfaces CI and test-count status badges.
+- Applied `rustfmt` so the CI format gate passes cleanly.
+
 ## 0.2.1 — 2026-06-12
 
 AI-first discoverability. No breaking changes.
