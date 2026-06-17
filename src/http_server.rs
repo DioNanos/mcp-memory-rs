@@ -222,6 +222,33 @@ async fn handle_write(
     let mut store = state.lock_store()?;
     let actor = state.config.acl.device_name.clone();
 
+    // Kind boundary: parity with the MCP memory_write tool — never let a
+    // declarative write clobber an append-only log. Fail closed on a read
+    // error rather than degrading to "not a log".
+    match store.is_log_category(&body.category) {
+        Ok(true) => {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "category '{}' is kind=log; append-only, not writable via /write",
+                    body.category
+                )),
+            }));
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "cannot determine kind of category '{}' (refusing write): {}",
+                    body.category, e
+                )),
+            }));
+        }
+    }
+
     match store.write(
         &body.category,
         &body.data,
@@ -758,6 +785,43 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_rejected_on_log_category() {
+        let config = make_config("write_log_guard");
+        let dir = config.resolved_base_dir();
+        let mut store = Store::new(&config).unwrap();
+        store
+            .append("evt_log", serde_json::json!({"n": 1}), None, "device-b")
+            .unwrap();
+        let state = AppState {
+            store: Arc::new(Mutex::new(store)),
+            config,
+            auth_token: "test_token".into(),
+        };
+        let app = build_router(state);
+
+        let body = serde_json::json!({"category": "evt_log", "data": {"x": 1}}).to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/write")
+            .header("authorization", "Bearer test_token")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            json["success"], false,
+            "HTTP write to a log must be rejected"
+        );
+
         cleanup(&dir);
     }
 

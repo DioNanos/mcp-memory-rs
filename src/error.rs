@@ -26,6 +26,9 @@ pub enum MemoryError {
     #[error("Invalid category name: {0}")]
     InvalidName(String),
 
+    #[error("Category kind mismatch: {0}")]
+    KindMismatch(String),
+
     #[error("Sync error: {0}")]
     Sync(String),
 

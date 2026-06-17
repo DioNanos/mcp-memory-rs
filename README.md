@@ -161,6 +161,7 @@ MCP_MEMORY_TOKEN=<secret> ./target/release/mcp-memory-rs --http
 |---|---|
 | `memory_read` | Read a category (optional field filtering). |
 | `memory_write` | Replace or merge-patch a category; versioned; `expected_hash` precondition. |
+| `memory_append` | Append a timestamped entry to a bounded append-only **log** category; auto-prunes by `max_entries`/`max_age_days`. For event streams / session journals, so they don't bloat memory categories. |
 | `memory_delete` | Delete a category (backup created first). |
 | `memory_list` | All categories with hash/size/last-update metadata. |
 | `memory_search` | FTS5 full-text search, BM25 ranking, category/date/actor filters, snippets. |

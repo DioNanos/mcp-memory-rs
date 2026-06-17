@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0 — 2026-06-17
+
+Append-only log categories. No breaking changes — existing memory categories
+and `memory_write`/`merge` semantics are untouched.
+
+### Added
+
+- **`memory_append` tool & log categories.** A category can now be a bounded,
+  append-only **log** (`{"_kind":"log","_retention":{…},"entries":[…]}`) instead
+  of a declarative memory map. `memory_append` stamps each entry with a UTC
+  timestamp and a monotonic id, and auto-prunes by retention (`max_entries`,
+  default 200, and/or `max_age_days`). This stops append-only event streams
+  (e.g. session journals) from bloating memory categories without bound.
+
+### Changed
+
+- **Kind boundary, fail-closed.** `memory_write`, the HTTP `/api/v1/write`
+  endpoint, and the migration `import_category` all refuse to clobber a log
+  category, and refuse the write if the category kind cannot be determined
+  (corrupt file) rather than degrading to "not a log". `memory_append` on a
+  memory category is rejected — never a silent conversion. Sync replication is
+  intentionally exempt so logs still propagate between devices.
+
+### Notes
+
+- A log is append-only **per store**; cross-device sync is whole-category
+  last-write-wins, not a CRDT union. Concurrent cross-device appends can drop
+  one side until the next prune. Entry ids reserve a future union/tombstone
+  merge.
+
 ## 0.2.2 — 2026-06-15
 
 Packaging and docs. No functional or API changes.

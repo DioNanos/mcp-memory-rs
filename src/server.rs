@@ -145,6 +145,40 @@ pub struct CompactParams {
     pub keep_versions: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AppendParams {
+    pub category: String,
+    /// The entry payload; stored under a server-stamped timestamp.
+    pub data: ObjectPayload,
+    /// Cap the log to the newest N entries (defaults to 200 on a new log).
+    pub max_entries: Option<u64>,
+    /// Drop entries older than this many days.
+    pub max_age_days: Option<u64>,
+}
+
+impl JsonSchema for AppendParams {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("AppendParams")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {
+                "category": { "type": "string" },
+                "data": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
+                },
+                "max_entries": { "type": "integer", "minimum": 0 },
+                "max_age_days": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["category", "data"],
+            "additionalProperties": false
+        })
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SyncManifestParams {
     /// Export manifest to file path (optional, returns inline if omitted)
@@ -310,6 +344,31 @@ impl MemoryServer {
         let mut store = self.lock_store()?;
         let actor = self.device_name();
 
+        // Kind boundary: never let a declarative write clobber an append-only
+        // log. Fail closed — a read/parse error must NOT degrade to "not a log"
+        // and silently overwrite a corrupted log file.
+        match store.is_log_category(&params.0.category) {
+            Ok(true) => {
+                return Err(McpError::internal_error(
+                    format!(
+                        "category '{}' is kind=log; use memory_append (or migrate it back to a memory category)",
+                        params.0.category
+                    ),
+                    None,
+                ));
+            }
+            Ok(false) => {}
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!(
+                        "cannot determine kind of category '{}' (refusing write): {}",
+                        params.0.category, e
+                    ),
+                    None,
+                ));
+            }
+        }
+
         // Get previous hash for compatibility
         let previous_hash = store
             .get_meta(&params.0.category)
@@ -354,6 +413,77 @@ impl MemoryServer {
                 "reason": params.0.reason,
                 "timestamp": meta.updated_at,
                 "backup_created": true,
+            }),
+        )
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?]))
+    }
+
+    // ── Tool 2b: memory_append ──────────────────────────────────
+
+    #[tool(
+        description = "Append a timestamped entry to a bounded append-only LOG category (creating it if missing). Use this for session journals / event streams instead of memory_write with ever-new keys: the server stamps each entry with a UTC timestamp and a monotonic id, and auto-prunes by retention (`max_entries`, default 200, and/or `max_age_days`). Bounded is the contract: pruned entries are dropped from live content — keep durable facts in a normal memory category instead. A log category cannot be written with memory_write, and memory_append on an existing non-log (memory) category is rejected — never a silent conversion."
+    )]
+    async fn memory_append(
+        &self,
+        params: Parameters<AppendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // ACL check
+        let ctx = self.acl_context();
+        match acl::authorize_write(&params.0.category, &ctx) {
+            acl::AclDecision::Denied(reason) => {
+                return Ok(CallToolResult::success(vec![Content::json(
+                    serde_json::json!({
+                        "success": false,
+                        "error": format!("Unauthorized write for category '{}'", params.0.category),
+                        "reason": reason,
+                        "device": ctx.device,
+                    }),
+                )
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?]));
+            }
+            acl::AclDecision::Allowed(_) => {}
+        }
+
+        // A zero entry cap would make every append immediately self-prune;
+        // reject it explicitly rather than silently keeping one.
+        if params.0.max_entries == Some(0) {
+            return Err(McpError::internal_error(
+                "max_entries must be >= 1 (0 would discard every appended entry)".to_string(),
+                None,
+            ));
+        }
+
+        let mut store = self.lock_store()?;
+        let actor = self.device_name();
+
+        let retention = if params.0.max_entries.is_some() || params.0.max_age_days.is_some() {
+            Some(crate::store::log::Retention {
+                max_entries: params.0.max_entries,
+                max_age_days: params.0.max_age_days,
+            })
+        } else {
+            None
+        };
+
+        let data = serde_json::Value::Object(params.0.data.0);
+        let meta = store
+            .append(&params.0.category, data, retention, &actor)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let total = store
+            .read(&params.0.category)
+            .ok()
+            .and_then(|v| v.get("entries").and_then(|e| e.as_array().map(|a| a.len())))
+            .unwrap_or(0);
+
+        Ok(CallToolResult::success(vec![Content::json(
+            serde_json::json!({
+                "success": true,
+                "category": meta.name,
+                "kind": "log",
+                "new_hash": meta.content_hash,
+                "timestamp": meta.updated_at,
+                "total_entries": total,
             }),
         )
         .map_err(|e| McpError::internal_error(e.to_string(), None))?]))
@@ -1531,6 +1661,146 @@ mod contract_tests {
 
         let value = stored(&server, "notes");
         assert!(value.get("b").is_none(), "failed merge left content intact");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    async fn append(
+        server: &MemoryServer,
+        category: &str,
+        data: ObjectPayload,
+        max_entries: Option<u64>,
+    ) -> Result<CallToolResult, McpError> {
+        server
+            .memory_append(Parameters(AppendParams {
+                category: category.into(),
+                data,
+                max_entries,
+                max_age_days: None,
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn append_creates_log_and_stamps_entries() {
+        let (config, dir) = admin_config("append-create");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        append(&server, "sessions", object(&[("n", json!(1))]), None)
+            .await
+            .expect("first append");
+        append(&server, "sessions", object(&[("n", json!(2))]), None)
+            .await
+            .expect("second append");
+
+        let value = stored(&server, "sessions");
+        assert_eq!(value["_kind"], json!("log"));
+        let entries = value["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["data"], json!({"n": 2}));
+        assert!(
+            entries[1]["ts"].as_str().unwrap().contains('T'),
+            "stamped ts"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn memory_write_rejected_on_log_category() {
+        let (config, dir) = admin_config("append-write-guard");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        append(&server, "sessions", object(&[("n", json!(1))]), None)
+            .await
+            .expect("append creates log");
+
+        let result = write(&server, "sessions", object(&[("x", json!(1))]), None, None).await;
+        assert!(result.is_err(), "memory_write on a log must be rejected");
+
+        let value = stored(&server, "sessions");
+        assert_eq!(value["_kind"], json!("log"), "log left intact");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn append_rejected_on_memory_category() {
+        let (config, dir) = admin_config("append-mem-guard");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        write(
+            &server,
+            "facts",
+            object(&[("state", json!("ok"))]),
+            None,
+            None,
+        )
+        .await
+        .expect("write memory category");
+
+        let result = append(&server, "facts", object(&[("x", json!(1))]), None).await;
+        assert!(
+            result.is_err(),
+            "append on a memory category must be rejected"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn append_rejects_zero_max_entries() {
+        let (config, dir) = admin_config("append-zero");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        let result = server
+            .memory_append(Parameters(AppendParams {
+                category: "z".into(),
+                data: object(&[("n", json!(1))]),
+                max_entries: Some(0),
+                max_age_days: None,
+            }))
+            .await;
+        assert!(result.is_err(), "max_entries=0 must be rejected");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn memory_write_fails_closed_on_corrupt_log() {
+        let (config, dir) = admin_config("append-corrupt");
+        let cat_path = config.categories_dir().join("evt.json");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        append(&server, "evt", object(&[("n", json!(1))]), None)
+            .await
+            .expect("create log");
+        // Corrupt the on-disk log file.
+        std::fs::write(&cat_path, "{ not valid json").unwrap();
+
+        let result = write(&server, "evt", object(&[("x", json!(1))]), None, None).await;
+        assert!(
+            result.is_err(),
+            "a write must fail closed when the category kind cannot be determined"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn append_respects_max_entries_arg() {
+        let (config, dir) = admin_config("append-cap");
+        let server = MemoryServer::from_config(config).expect("server should start");
+
+        for n in 0..4 {
+            append(&server, "capped", object(&[("n", json!(n))]), Some(2))
+                .await
+                .expect("append");
+        }
+        let value = stored(&server, "capped");
+        let entries = value["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2, "capped to max_entries");
+        assert_eq!(entries[0]["data"], json!({"n": 2}), "oldest dropped");
 
         let _ = std::fs::remove_dir_all(dir);
     }

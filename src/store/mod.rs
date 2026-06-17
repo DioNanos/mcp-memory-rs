@@ -1,4 +1,5 @@
 pub mod json_files;
+pub mod log;
 pub mod sqlite;
 
 use crate::config::MemoryConfig;
@@ -329,6 +330,50 @@ impl Store {
             hash_short
         );
         Ok(meta)
+    }
+
+    /// True if `name` exists and is a log-kind category. Missing category = false.
+    pub fn is_log_category(&self, name: &str) -> Result<bool> {
+        match self.read(name) {
+            Ok(v) => Ok(log::is_log(&v)),
+            Err(crate::error::MemoryError::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Append `data` as a server-stamped entry to a log category (creating it if
+    /// missing), applying retention, then persisting via the normal versioned
+    /// write path. Errors if the category exists and is not a log.
+    pub fn append(
+        &mut self,
+        name: &str,
+        data: serde_json::Value,
+        retention: Option<log::Retention>,
+        actor: &str,
+    ) -> Result<CategoryMeta> {
+        let existing = match self.read(name) {
+            Ok(v) => Some(v),
+            Err(crate::error::MemoryError::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+
+        // Effective retention: explicit override > stored on the log > default.
+        let effective = retention
+            .or_else(|| existing.as_ref().and_then(log::stored_retention))
+            .unwrap_or_default();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let new_value =
+            log::append_entry(existing.as_ref(), data, effective, &now).map_err(|e| match e {
+                log::LogError::NotALog => crate::error::MemoryError::KindMismatch(format!(
+                    "category '{name}' is kind=memory; use memory_write, or migrate it to a log"
+                )),
+                log::LogError::MalformedLog => crate::error::MemoryError::KindMismatch(format!(
+                    "category '{name}' is marked as a log but is structurally malformed"
+                )),
+            })?;
+
+        self.write(name, &new_value, Some("append"), actor, None)
     }
 
     pub fn list(&self) -> Result<Vec<CategoryMeta>> {
@@ -779,6 +824,16 @@ impl Store {
         value: &serde_json::Value,
         actor: &str,
     ) -> Result<CategoryMeta> {
+        // Kind boundary: an import (e.g. Node.js migration) must not silently
+        // clobber an existing append-only log with a declarative value. Fail
+        // closed — if the kind cannot be determined (corrupt file), abort the
+        // import rather than overwrite.
+        if !log::is_log(value) && self.is_log_category(name)? {
+            return Err(crate::error::MemoryError::KindMismatch(format!(
+                "category '{name}' is kind=log; refusing to overwrite it with a non-log import"
+            )));
+        }
+
         let json_str = serde_json::to_string_pretty(value)?;
         let content_hash = Self::compute_hash(&json_str);
         let now = chrono::Utc::now().to_rfc3339();
@@ -1090,6 +1145,118 @@ mod tests {
 
     fn cleanup(dir: &PathBuf) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_store_append_creates_log_and_appends() {
+        let (config, dir) = unique_config("append");
+        let mut store = Store::new(&config).unwrap();
+
+        store
+            .append("sess_log", serde_json::json!({"n": 1}), None, "tester")
+            .unwrap();
+        store
+            .append("sess_log", serde_json::json!({"n": 2}), None, "tester")
+            .unwrap();
+
+        let v = store.read("sess_log").unwrap();
+        assert!(log::is_log(&v));
+        let entries = v["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["data"], serde_json::json!({"n": 2}));
+        assert!(
+            entries[1]["ts"].as_str().unwrap().contains('T'),
+            "server stamps ts"
+        );
+        assert!(store.is_log_category("sess_log").unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_store_append_rejects_memory_category() {
+        let (config, dir) = unique_config("append_rej");
+        let mut store = Store::new(&config).unwrap();
+
+        store
+            .write(
+                "mem_cat",
+                &serde_json::json!({"state": "ok"}),
+                None,
+                "tester",
+                None,
+            )
+            .unwrap();
+        let err = store
+            .append("mem_cat", serde_json::json!({"x": 1}), None, "tester")
+            .unwrap_err();
+        assert!(matches!(err, crate::error::MemoryError::KindMismatch(_)));
+        assert!(!store.is_log_category("mem_cat").unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_store_append_caps_at_max_entries() {
+        let (config, dir) = unique_config("append_cap");
+        let mut store = Store::new(&config).unwrap();
+
+        let ret = Some(log::Retention {
+            max_entries: Some(3),
+            max_age_days: None,
+        });
+        for n in 0..5 {
+            store
+                .append("capped", serde_json::json!({"n": n}), ret, "tester")
+                .unwrap();
+        }
+        let v = store.read("capped").unwrap();
+        let entries = v["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3, "bounded log");
+        assert_eq!(
+            entries[0]["data"],
+            serde_json::json!({"n": 2}),
+            "oldest dropped"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_import_does_not_clobber_existing_log() {
+        let (config, dir) = unique_config("import_log");
+        let mut store = Store::new(&config).unwrap();
+
+        store
+            .append("evt", serde_json::json!({"n": 1}), None, "tester")
+            .unwrap();
+        // A migration importing a plain memory value over the log name must fail.
+        let err = store
+            .import_category("evt", &serde_json::json!({"state": "ok"}), "migration")
+            .unwrap_err();
+        assert!(matches!(err, crate::error::MemoryError::KindMismatch(_)));
+        // log left intact
+        let v = store.read("evt").unwrap();
+        assert!(log::is_log(&v));
+        assert_eq!(v["entries"].as_array().unwrap().len(), 1);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_import_fails_closed_on_corrupt_target() {
+        let (config, dir) = unique_config("import_corrupt");
+        let cat_path = config.categories_dir().join("evt.json");
+        let mut store = Store::new(&config).unwrap();
+
+        store
+            .append("evt", serde_json::json!({"n": 1}), None, "tester")
+            .unwrap();
+        std::fs::write(&cat_path, "{ not valid json").unwrap();
+
+        let err = store
+            .import_category("evt", &serde_json::json!({"state": "ok"}), "migration")
+            .unwrap_err();
+        // must NOT degrade to "not a log" and clobber: any non-NotFound read
+        // error aborts the import.
+        assert!(!matches!(err, crate::error::MemoryError::NotFound(_)));
+        cleanup(&dir);
     }
 
     #[test]
