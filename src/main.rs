@@ -51,9 +51,10 @@ async fn main() -> Result<()> {
         );
         eprintln!();
         eprintln!("Environment:");
-        eprintln!("  MCP_MEMORY_DIR     Storage directory (default: ~/.memory)");
+        eprintln!("  MCP_MEMORY_DIR     Storage directory (standalone default: ~/.memory)");
         eprintln!("  MCP_DEVICE         Device identity for ACL");
-        eprintln!("  MCP_MEMORY_CONFIG  Config file path");
+        eprintln!("  MCP_MEMORY_CONFIG  Explicit config file path");
+        eprintln!("  MCP_MEMORY_REQUIRE_CONFIG  1/true to fail if no config is found");
         eprintln!("  MCP_MEMORY_HOST    HTTP bind host (default: 127.0.0.1)");
         eprintln!("  MCP_MEMORY_PORT    HTTP bind port (default: 3100)");
         eprintln!("  MCP_MEMORY_TOKEN   Auth token for HTTP mode (required for --http)");

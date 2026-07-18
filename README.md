@@ -1,7 +1,7 @@
 # mcp-memory-rs
 
 [![CI](https://img.shields.io/github/actions/workflow/status/DioNanos/mcp-memory-rs/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/DioNanos/mcp-memory-rs/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-79%20passing-2ea44f?style=flat-square)](https://github.com/DioNanos/mcp-memory-rs/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-106%20passing-2ea44f?style=flat-square)](https://github.com/DioNanos/mcp-memory-rs/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![Local First](https://img.shields.io/badge/local--first-no%20cloud%20deps-111827?style=flat-square)](#why)
@@ -91,7 +91,12 @@ Claude Code (`~/.claude.json`) or any MCP client:
   "mcpServers": {
     "memory": {
       "command": "/path/to/mcp-memory-rs",
-      "env": { "MCP_DEVICE": "my-laptop" }
+      "env": {
+        "MCP_MEMORY_CONFIG": "/home/me/.config/mcp-memory-rs/config.toml",
+        "MCP_MEMORY_REQUIRE_CONFIG": "1",
+        "MCP_MEMORY_MODE": "offline",
+        "MCP_DEVICE": "my-laptop"
+      }
     }
   }
 }
@@ -102,15 +107,16 @@ Codex (`~/.codex/config.toml`):
 ```toml
 [mcp_servers.memory]
 command = "/path/to/mcp-memory-rs"
-env = { MCP_DEVICE = "my-laptop" }
+env = { MCP_MEMORY_CONFIG = "/home/me/.config/mcp-memory-rs/config.toml", MCP_MEMORY_REQUIRE_CONFIG = "1", MCP_MEMORY_MODE = "offline", MCP_DEVICE = "my-laptop" }
 # auto-approve read-only tools (memory_read/list/search/…); writes still gated
 default_tools_approval_mode = "approve"
 ```
 
-Configuration is TOML — copy [`config/example.toml`](config/example.toml) and
-adjust. Environment variables override file values (`MCP_DEVICE`,
-`MCP_MEMORY_MODE`, `MCP_MEMORY_DIR`, …); the example file documents all of
-them.
+Configuration is TOML — copy [`config/example.toml`](config/example.toml) to
+`~/.config/mcp-memory-rs/config.toml` and adjust it. The server auto-discovers
+that XDG-style path. Environment variables override file values (`MCP_DEVICE`,
+`MCP_MEMORY_MODE`, `MCP_MEMORY_DIR`, …); managed deployments should set
+`MCP_MEMORY_REQUIRE_CONFIG=1` so a missing config fails closed.
 
 ## Memory model
 
@@ -197,8 +203,11 @@ The server is built to be self-explanatory to a weak client model:
 
 ## Storage layout
 
-Default `base_dir` is `~/.memory`; the example config uses
-`~/.local/state/mcp-memory-rs` (XDG-style). Either way the layout is:
+With no config and strict mode disabled, standalone `base_dir` remains
+`~/.memory` for compatibility. The auto-discovered example config uses
+`~/.local/state/mcp-memory-rs` (XDG-style). Config resolution is: explicit
+`MCP_MEMORY_CONFIG`, `$XDG_CONFIG_HOME`, `$HOME/.config`, legacy cwd-local
+`memory-config.toml`, then standalone defaults. Either way the layout is:
 
 ```
 <base_dir>/

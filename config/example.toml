@@ -1,7 +1,7 @@
 # mcp-memory-rs — example configuration
 #
-# Copy this file to memory-config.toml (or set MCP_MEMORY_CONFIG=/path/to/config.toml)
-# and adjust the values for your deployment.
+# Copy this file to ~/.config/mcp-memory-rs/config.toml (auto-discovered),
+# or set MCP_MEMORY_CONFIG=/path/to/config.toml, then adjust it.
 #
 # Environment variables override the corresponding TOML fields at startup:
 #   MCP_MEMORY_MODE       = offline | http
@@ -33,6 +33,10 @@ port = 3110
 # Tilde (~) is expanded to $HOME at runtime. Environment variables such as
 # $HOME are NOT expanded here — use ~ or an absolute path.
 base_dir = "~/.local/state/mcp-memory-rs"
+
+# Managed clients should also export MCP_MEMORY_REQUIRE_CONFIG=1. This makes a
+# missing/unreadable config a startup error instead of creating the standalone
+# compatibility store at ~/.memory.
 
 # How many days of daily backups to retain.
 backup_retention_days = 30

@@ -1,9 +1,11 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Server modes accepted by `MCP_MEMORY_MODE` env var.
 const VALID_MEMORY_MODES: &[&str] = &["offline", "http"];
+const CONFIG_RELATIVE_PATH: &str = "mcp-memory-rs/config.toml";
+const LEGACY_CWD_CONFIG: &str = "memory-config.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -151,30 +153,48 @@ impl MemoryConfig {
             .expect("MemoryConfig::load failed; use try_load() for non-panicking variant")
     }
 
-    /// Load configuration from TOML + env overrides. Returns an error if env
-    /// values fail validation (currently: `MCP_MEMORY_MODE` must be one of
-    /// `offline`, `http`).
+    /// Load configuration from TOML + env overrides.
+    ///
+    /// Resolution order is explicit `MCP_MEMORY_CONFIG`, XDG config, the
+    /// conventional `$HOME/.config` path, then the legacy cwd-local
+    /// `memory-config.toml`.  This makes a bare subprocess converge on the same
+    /// managed store as MCP clients instead of silently creating `~/.memory`.
+    /// Set `MCP_MEMORY_REQUIRE_CONFIG=1` to fail closed when no config exists.
     pub fn try_load() -> Result<Self> {
-        let config_path = std::env::var("MCP_MEMORY_CONFIG")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("memory-config.toml"));
-
-        if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path).unwrap_or_else(|e| {
-                tracing::warn!("Cannot read config {}: {}", config_path.display(), e);
-                String::new()
-            });
-            if let Ok(mut cfg) = toml::from_str::<Self>(&content) {
-                tracing::info!("Loaded config from {}", config_path.display());
-                cfg.apply_env_overrides()?;
-                cfg.warn_if_legacy_store_orphan();
-                return Ok(cfg);
+        let explicit = match std::env::var_os("MCP_MEMORY_CONFIG") {
+            Some(value) if value.is_empty() => {
+                bail!("MCP_MEMORY_CONFIG is set but empty")
             }
+            value => value.map(PathBuf::from),
+        };
+        let require_config = parse_bool_env("MCP_MEMORY_REQUIRE_CONFIG")?;
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        if let Some(config_path) = discover_config_path(explicit, xdg, home, &cwd) {
+            return Self::load_config_file(&config_path);
+        }
+        if require_config {
+            bail!(
+                "MCP_MEMORY_REQUIRE_CONFIG=1 but no config was found; set MCP_MEMORY_CONFIG or create ~/.config/mcp-memory-rs/config.toml"
+            );
         }
 
-        // Override from env
+        // Backward-compatible standalone mode. Managed deployments should use
+        // the auto-discovered XDG config and strict mode above.
         let mut cfg = Self::default();
+        cfg.apply_env_overrides()?;
+        cfg.warn_if_legacy_store_orphan();
+        Ok(cfg)
+    }
+
+    fn load_config_file(config_path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(config_path)
+            .with_context(|| format!("cannot read config {}", config_path.display()))?;
+        let mut cfg = toml::from_str::<Self>(&content)
+            .with_context(|| format!("invalid config {}", config_path.display()))?;
+        tracing::info!("Loaded config from {}", config_path.display());
         cfg.apply_env_overrides()?;
         cfg.warn_if_legacy_store_orphan();
         Ok(cfg)
@@ -286,6 +306,52 @@ impl MemoryConfig {
     }
 }
 
+fn discover_config_path(
+    explicit: Option<PathBuf>,
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    // An explicit path is authoritative even when missing: load_config_file
+    // will return a clear error instead of silently falling back.
+    if explicit.is_some() {
+        return explicit;
+    }
+
+    let mut candidates = Vec::with_capacity(3);
+    if let Some(xdg) = xdg_config_home.filter(|p| !p.as_os_str().is_empty()) {
+        candidates.push(xdg.join(CONFIG_RELATIVE_PATH));
+    }
+    if let Some(home) = home {
+        let conventional = home.join(".config").join(CONFIG_RELATIVE_PATH);
+        if !candidates.contains(&conventional) {
+            candidates.push(conventional);
+        }
+    }
+    candidates.push(cwd.join(LEGACY_CWD_CONFIG));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn parse_bool_env(name: &str) -> Result<bool> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(false);
+    };
+    let value = value.to_string_lossy();
+    parse_bool_value(name, &value)
+}
+
+fn parse_bool_value(name: &str, value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" | "" => Ok(false),
+        _ => bail!(
+            "{}='{}' is invalid; expected one of: 1, true, yes, on, 0, false, no, off",
+            name,
+            value
+        ),
+    }
+}
+
 // Minimal hostname fallback (avoid extra crate)
 mod hostname {
     use std::ffi::OsString;
@@ -315,6 +381,21 @@ mod hostname {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mcp-memory-config-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[test]
     fn test_default_config_values() {
@@ -419,5 +500,73 @@ remote_token_file = "/tmp/token"
         assert_eq!(cfg.server.mode, "offline");
         assert_eq!(cfg.server.port, 3110);
         assert_eq!(cfg.acl.device_name, "tablet-c");
+    }
+
+    #[test]
+    fn test_config_discovery_prefers_explicit_then_xdg_then_home_then_cwd() {
+        let root = test_dir("discovery");
+        let xdg = root.join("xdg");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let xdg_cfg = xdg.join(CONFIG_RELATIVE_PATH);
+        let home_cfg = home.join(".config").join(CONFIG_RELATIVE_PATH);
+        let cwd_cfg = cwd.join(LEGACY_CWD_CONFIG);
+        for path in [&xdg_cfg, &home_cfg, &cwd_cfg] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "[storage]\nbase_dir='/tmp/test'\n").unwrap();
+        }
+
+        assert_eq!(
+            discover_config_path(None, Some(xdg.clone()), Some(home.clone()), &cwd),
+            Some(xdg_cfg)
+        );
+        fs::remove_file(xdg.join(CONFIG_RELATIVE_PATH)).unwrap();
+        assert_eq!(
+            discover_config_path(None, Some(xdg), Some(home.clone()), &cwd),
+            Some(home_cfg)
+        );
+        fs::remove_file(home.join(".config").join(CONFIG_RELATIVE_PATH)).unwrap();
+        assert_eq!(
+            discover_config_path(None, None, Some(home), &cwd),
+            Some(cwd_cfg)
+        );
+
+        let explicit = root.join("explicit-missing.toml");
+        assert_eq!(
+            discover_config_path(Some(explicit.clone()), None, None, &cwd),
+            Some(explicit)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_config_discovery_returns_none_without_any_config() {
+        let root = test_dir("none");
+        assert_eq!(
+            discover_config_path(None, Some(root.join("xdg")), Some(root.join("home")), &root),
+            None
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_require_config_flag_is_strict_and_validated() {
+        for value in ["1", "true", "YES", "on"] {
+            assert!(parse_bool_value("MCP_MEMORY_REQUIRE_CONFIG", value).unwrap());
+        }
+        for value in ["0", "false", "NO", "off", ""] {
+            assert!(!parse_bool_value("MCP_MEMORY_REQUIRE_CONFIG", value).unwrap());
+        }
+        assert!(parse_bool_value("MCP_MEMORY_REQUIRE_CONFIG", "maybe").is_err());
+    }
+
+    #[test]
+    fn test_discovered_invalid_config_fails_instead_of_falling_back() {
+        let root = test_dir("invalid");
+        let config = root.join("config.toml");
+        fs::write(&config, "not valid toml = [").unwrap();
+        let err = MemoryConfig::load_config_file(&config).unwrap_err();
+        assert!(err.to_string().contains("invalid config"));
+        fs::remove_dir_all(root).unwrap();
     }
 }

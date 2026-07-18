@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 — 2026-07-18
+
+Configuration safety hardening. Managed installations no longer split into a
+stale `~/.memory` store when a subprocess omits `MCP_MEMORY_CONFIG`.
+
+### Added
+
+- Automatic config discovery in this order: explicit `MCP_MEMORY_CONFIG`,
+  `$XDG_CONFIG_HOME/mcp-memory-rs/config.toml`,
+  `$HOME/.config/mcp-memory-rs/config.toml`, then the legacy cwd-local
+  `memory-config.toml`.
+- `MCP_MEMORY_REQUIRE_CONFIG=1` strict mode. When enabled, startup fails before
+  creating storage if no config can be found.
+- Regression tests proving that strict startup cannot create `~/.memory` and
+  that a bare subprocess converges on the managed config/store.
+
+### Changed
+
+- Explicit, discovered, unreadable, or malformed config files now fail with a
+  clear error instead of silently falling back to defaults.
+
 ## 0.3.0 — 2026-06-17
 
 Append-only log categories. No breaking changes — existing memory categories
