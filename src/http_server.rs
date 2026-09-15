@@ -174,15 +174,15 @@ async fn handle_read(
 ) -> Result<Json<ApiResponse>, (StatusCode, Json<ApiResponse>)> {
     state.check_auth(&headers)?;
     let store = state.lock_store()?;
-    match store.read(&params.category) {
-        Ok(value) => {
+    match store.read_with_meta(&params.category) {
+        Ok((value, meta)) => {
             let result = if let Some(fields) = &params.fields {
                 filter_fields_json(&value, fields)
             } else {
                 value
             };
 
-            let meta = store.get_meta(&params.category).ok().flatten();
+            let meta = Some(meta);
             let mut data = serde_json::to_value(&result).unwrap_or(result);
 
             if let (Some(obj), Some(m)) = (data.as_object_mut(), meta) {
@@ -736,6 +736,7 @@ mod tests {
                 base_dir: dir.clone(),
                 backup_retention_days: 30,
                 max_versions: 100,
+                ..crate::config::MemoryConfig::default().storage
             },
             acl: crate::config::AclConfig {
                 admin_devices: vec!["device-b".into()],

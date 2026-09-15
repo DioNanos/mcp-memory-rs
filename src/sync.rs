@@ -315,18 +315,17 @@ pub fn export_sync_envelope(
 ) -> Result<SyncTransferEnvelope> {
     let mut entries = Vec::new();
     for name in categories {
-        match store.read(name) {
-            Ok(data) => {
-                if let Some(meta) = store.get_meta(name)? {
-                    entries.push(SyncTransferEntry {
-                        name: name.clone(),
-                        data,
-                        content_hash: meta.content_hash,
-                        updated_at: meta.updated_at,
-                        updated_by: meta.updated_by,
-                        reason: None,
-                    });
-                }
+        // One coherent read: the advertised hash is the hash of `data`.
+        match store.read_with_meta(name) {
+            Ok((data, meta)) => {
+                entries.push(SyncTransferEntry {
+                    name: name.clone(),
+                    data,
+                    content_hash: meta.content_hash,
+                    updated_at: meta.updated_at,
+                    updated_by: meta.updated_by,
+                    reason: None,
+                });
             }
             Err(e) => {
                 tracing::warn!("Skipping {} for sync export: {}", name, e);
@@ -390,7 +389,17 @@ pub fn apply_sync_envelope(
     for entry in &envelope.categories {
         match store.get_meta(&entry.name) {
             Ok(Some(local_meta)) => {
-                if local_meta.content_hash != entry.content_hash {
+                // Same bytes, or exactly the remote version we imported last
+                // time (whose serialization may differ from ours): nothing to do.
+                let already = store
+                    .holds_remote_version(
+                        &entry.name,
+                        &local_meta,
+                        &entry.content_hash,
+                        &entry.updated_by,
+                    )
+                    .unwrap_or(false);
+                if !already {
                     // Build a temporary PullEntry for resolve_conflict compat
                     let remote = PullEntry {
                         name: entry.name.clone(),
@@ -935,6 +944,7 @@ mod tests {
                 base_dir: dir.clone(),
                 backup_retention_days: 30,
                 max_versions: 100,
+                ..crate::config::MemoryConfig::default().storage
             },
             acl: crate::config::AclConfig::default(),
             sync: crate::config::SyncConfig::default(),

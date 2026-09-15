@@ -277,19 +277,19 @@ impl MemoryServer {
         params: Parameters<ReadParams>,
     ) -> Result<CallToolResult, McpError> {
         let store = self.lock_store()?;
-        let value = store
-            .read(&params.0.category)
+        // One coherent read: the returned hash is the hash of the returned
+        // bytes, so a later expected_hash write cannot pair a stale value
+        // with a newer hash.
+        let (value, meta) = store
+            .read_with_meta(&params.0.category)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let meta = Some(meta);
 
         let result = if let Some(fields) = &params.0.fields {
             filter_fields(&value, fields)
         } else {
             value
         };
-
-        let meta = store
-            .get_meta(&params.0.category)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let mut response = serde_json::to_value(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -344,60 +344,21 @@ impl MemoryServer {
         let mut store = self.lock_store()?;
         let actor = self.device_name();
 
-        // Kind boundary: never let a declarative write clobber an append-only
-        // log. Fail closed — a read/parse error must NOT degrade to "not a log"
-        // and silently overwrite a corrupted log file.
-        match store.is_log_category(&params.0.category) {
-            Ok(true) => {
-                return Err(McpError::internal_error(
-                    format!(
-                        "category '{}' is kind=log; use memory_append (or migrate it back to a memory category)",
-                        params.0.category
-                    ),
-                    None,
-                ));
-            }
-            Ok(false) => {}
-            Err(e) => {
-                return Err(McpError::internal_error(
-                    format!(
-                        "cannot determine kind of category '{}' (refusing write): {}",
-                        params.0.category, e
-                    ),
-                    None,
-                ));
-            }
-        }
-
-        // Get previous hash for compatibility
-        let previous_hash = store
-            .get_meta(&params.0.category)
-            .ok()
-            .flatten()
-            .map(|m| m.content_hash);
-
-        let data_value = if params.0.merge.unwrap_or(false) {
-            let mut current = match store.read(&params.0.category) {
-                Ok(serde_json::Value::Object(map)) => map,
-                Ok(_) => serde_json::Map::new(),
-                Err(crate::error::MemoryError::NotFound(_)) => serde_json::Map::new(),
-                Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-            };
-            for (k, v) in params.0.data.0 {
-                if v.is_null() {
-                    current.remove(&k);
-                } else {
-                    current.insert(k, v);
-                }
-            }
-            serde_json::Value::Object(current)
+        // Kind boundary, optional CAS and the merge itself all happen inside
+        // the store's write transaction (cross-process lock): two clients
+        // patching disjoint keys cannot lose each other's update, and a
+        // declarative write can never clobber an append-only log.
+        let replace_value;
+        let mode = if params.0.merge.unwrap_or(false) {
+            crate::store::WriteMode::Merge(&params.0.data.0)
         } else {
-            serde_json::Value::Object(params.0.data.0)
+            replace_value = serde_json::Value::Object(params.0.data.0.clone());
+            crate::store::WriteMode::Replace(&replace_value)
         };
-        let meta = store
-            .write(
+        let (previous_hash, meta) = store
+            .write_with(
                 &params.0.category,
-                &data_value,
+                mode,
                 params.0.reason.as_deref(),
                 &actor,
                 params.0.expected_hash.as_deref(),
@@ -1297,6 +1258,7 @@ mod contract_tests {
                 base_dir: dir.clone(),
                 backup_retention_days: 30,
                 max_versions: 5,
+                ..MemoryConfig::default().storage
             },
             acl: AclConfig {
                 admin_devices: vec![],

@@ -125,6 +125,7 @@ mod tests {
                 base_dir: base.to_path_buf(),
                 backup_retention_days: 30,
                 max_versions: 100,
+                ..crate::config::MemoryConfig::default().storage
             },
             acl: crate::config::AclConfig::default(),
             sync: crate::config::SyncConfig::default(),

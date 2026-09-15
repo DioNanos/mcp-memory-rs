@@ -1,6 +1,6 @@
 [package]
 name = "mcp-memory-rs"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Local-first MCP memory server with per-device ACL and fleet sync"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ exclude = [".forgejo/**", "skills/**"]
 
 [dependencies]
 rmcp = { version = "1.7", features = ["server", "macros", "transport-io"] }
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

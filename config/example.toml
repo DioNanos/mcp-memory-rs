@@ -44,6 +44,23 @@ backup_retention_days = 30
 # Maximum number of versions kept per category.
 max_versions = 100
 
+# SQLite journal mode: "wal" (default; readers never block the writer) or
+# "delete". Persistent in the database file once applied.
+journal_mode = "wal"
+
+# Durability: "full" (default) fsyncs at every commit; "normal" may lose the
+# most recent commits on power loss / OS crash — choose it explicitly.
+synchronous = "full"
+
+# Per-statement SQLite busy handler (ms). Keep it short: the store runs its
+# own bounded retry loop with jittered backoff on top of it.
+sqlite_busy_timeout_ms = 200
+
+# Total budget (ms) one mutation may wait for the cross-process write lock
+# before failing with a clear "Store busy" error. Keep it below the timeout of
+# the MCP client that calls you.
+lock_deadline_ms = 10000
+
 # ── Access Control ────────────────────────────────────────────────────────────
 
 [acl]

@@ -35,6 +35,22 @@ pub struct StorageConfig {
     pub backup_retention_days: u32,
     #[serde(default = "default_max_versions")]
     pub max_versions: u32,
+    /// SQLite journal mode applied at open: "wal" (default) or "delete".
+    #[serde(default = "default_journal_mode")]
+    pub journal_mode: String,
+    /// SQLite synchronous level: "full" (default, durable) or "normal"
+    /// (may lose the most recent commits on power loss — explicit choice).
+    #[serde(default = "default_synchronous")]
+    pub synchronous: String,
+    /// Per-statement SQLite busy handler budget (ms). Kept short: the store
+    /// does its own bounded retry loop on top of it.
+    #[serde(default = "default_sqlite_busy_timeout_ms")]
+    pub sqlite_busy_timeout_ms: u64,
+    /// Total budget (ms) a mutation may wait for the cross-process write lock
+    /// before failing with a clear Busy error. Must stay below the caller's
+    /// own timeout.
+    #[serde(default = "default_lock_deadline_ms")]
+    pub lock_deadline_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +96,18 @@ fn default_backup_retention() -> u32 {
 }
 fn default_max_versions() -> u32 {
     100
+}
+fn default_journal_mode() -> String {
+    "wal".into()
+}
+fn default_synchronous() -> String {
+    "full".into()
+}
+fn default_sqlite_busy_timeout_ms() -> u64 {
+    200
+}
+fn default_lock_deadline_ms() -> u64 {
+    10_000
 }
 fn default_device_name() -> String {
     std::env::var("MCP_DEVICE").unwrap_or_else(|_| {
@@ -128,6 +156,10 @@ impl Default for MemoryConfig {
                 base_dir: default_base_dir(),
                 backup_retention_days: default_backup_retention(),
                 max_versions: default_max_versions(),
+                journal_mode: default_journal_mode(),
+                synchronous: default_synchronous(),
+                sqlite_busy_timeout_ms: default_sqlite_busy_timeout_ms(),
+                lock_deadline_ms: default_lock_deadline_ms(),
             },
             acl: AclConfig {
                 admin_devices: vec![],

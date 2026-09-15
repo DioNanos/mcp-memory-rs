@@ -213,8 +213,67 @@ With no config and strict mode disabled, standalone `base_dir` remains
 <base_dir>/
 ├── categories/   # one .json file per category — the source of truth
 ├── backups/      # automatic pre-delete/pre-overwrite backups
-└── memory.db     # SQLite: FTS5 index, versions, sync state (rebuildable)
+├── memory.db     # SQLite: FTS5 index, versions, sync state (rebuildable)
+└── memory.db-wal # write-ahead log (WAL mode; do not copy or delete by hand)
 ```
+
+### Concurrency (many processes, one store)
+
+Every writer — one stdio server per client plus the optional `--http`
+instance — opens its own SQLite connection on the same file. Since 0.3.2 each
+mutation runs inside a `BEGIN IMMEDIATE` transaction: SQLite is the mutex that
+serializes writers *across processes*, so an append (read → modify → write) can
+never lose another process's entry. Lock acquisition is retried with jittered
+backoff inside one total budget; when it expires the call fails with a clear
+`Store busy … retry later` error instead of hanging or corrupting anything.
+
+```toml
+[storage]
+journal_mode = "wal"           # "wal" (default) or "delete"
+synchronous = "full"           # "full" (default, durable) or "normal"
+sqlite_busy_timeout_ms = 200   # per-statement SQLite busy handler
+lock_deadline_ms = 10000       # total wait for the write lock per mutation
+```
+
+Category JSON files are written crash-safely: the new content is staged next
+to the file (a name unique to the transaction), the SQLite rows are
+committed, then the staged file is renamed into place. A process that dies in
+between leaves a staged file whose fate is decided by its hash under the next
+write lock (matching the committed hash → promoted; otherwise → discarded).
+Readers never rename or delete anything: they serve whichever file carries
+the committed hash. `memory_write merge=true`, the log/memory kind check and
+the optional `expected_hash` compare-and-swap all run inside the same lock.
+
+### Snapshot and restore
+
+`memory.db` alone is not a backup (WAL, JSON files). Use the CLI:
+
+```bash
+mcp-memory-rs --snapshot /path/to/snap-2026-09-15 --with-backups  # db + json + backups + manifest
+mcp-memory-rs --restore  /path/to/snap-2026-09-15 --stopped
+mcp-memory-rs --verify-store                                      # read-only: db vs json, pending files
+```
+
+`--verify-store` never opens a `Store` (no PRAGMA, schema or reconcile): it is
+safe on a store another binary still owns. A store written by a version older
+than 0.3.2 can hold categories whose file is newer than the database row (a
+write whose SQL failed): `--adopt-json --plan out.json` describes them
+read-only and `--adopt-json --apply out.json` adopts the files, with
+preconditions, under the lock. Restore's final swap is a few
+renames — copy-safe, not atomic as a group: a `RESTORE_IN_PROGRESS` marker
+keeps the store closed until an interrupted swap is recovered by hand.
+
+A snapshot blocks writers for its duration (readers continue), runs
+`VACUUM INTO` and copies the category files, so both halves describe the same
+instant; it is verified before it is reported. Coverage is explicit in
+`manifest.json`: without `--with-backups` only the current content and the
+version *metadata* are covered — `memory_history` payloads (`read_version`)
+live in `backups/` and need `--with-backups`. Restore verifies the snapshot
+(integrity, one file per category with the recorded hash) **before** touching
+anything, then replaces the live store and parks the previous one under
+`<base_dir>/restore-parked-<timestamp>/`; it **requires every mcp-memory-rs
+process on that store to be stopped first** — the `--stopped` flag is your
+word for it.
 
 ## Building and testing
 
